@@ -1,0 +1,233 @@
+Serialization : Converting object to string; Popular encoding formats are JSON and XML
+
+				Server responds to Client in form of Object and we need to convert it into string
+
+Deserialize : Reverse of serialization; within client application we work with objects and not with strings hence to work efficiently with data we need to deserialize the object.
+
+
+namespace ABC
+{
+    public class TestCaseDataDto
+    {
+        public decimal Id { get; set; }
+        public string Description { get; set; }
+        public string ServiceType { get; set; }
+        public string uri { get; set; }
+        public string Headers { get; set; }
+        public string InputJson { get; set; }
+        public int StatusCode { get; set; }
+        public string expectedoutput { get; set; }
+        public string expectedjson { get; set; }
+        public string expectedjsonForVspFalse { get; set; }
+        public string SortBy { get; set; }
+        public string OrderBy { get; set; }
+    }
+}
+
+
+namespace ABC
+{
+    public class TestCaseSource
+    {
+
+        public static IEnumerable GetTestcase(string FileName, string SheetName)
+        {
+            List<TestCaseDataDto> testcases = LoadTestCases(FileName, SheetName);
+            foreach (var testcase in testcases)
+                yield return new TestCaseData(testcase)
+                    .SetName(string.Format("{0}:{1}", testcase.Id, testcase.Description));
+
+        }
+
+        public static List<TestCaseDataDto> LoadTestCases(string FileName, string SheetName)
+        {
+            var filepath = "TestData\\" + FileName;
+            string datafilepath = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory + filepath);
+            var TCfile = new FileInfo(datafilepath);
+            List<TestCaseDataDto> TestCasesDto = ExcelHelper.LoadObjects<TestCaseDataDto>(TCfile, SheetName);
+            return TestCasesDto;
+        }
+    }
+}
+
+
+namespace ABC
+{
+	class GetExampleTest {
+	
+	ResponseContext _response;
+        string sourceJson;
+
+	[Test]
+	[TestCaseSource(typeof(TestCaseSource), "GetTestcase", new object[] { "LegalEntity.xlsx", "GetCreditReport" })]
+	
+	public void GetCreditReport(TestCaseDataDto testdata)
+	{
+		string host = "http://ap-pun-ws4280:53520";
+		_response = FrameworkHelper.Get(testdata.Headers, host, testdata.uri)
+		FrameworkHelper.VerifyStatus(_response, $"Verify Status Code {testdata.StatusCode}", testdata.StatusCode);
+		
+		sourceJson = FrameworkHelper.RetrieveJson(_response);
+		JsonCompare.Compare(sourceJson, testdata.expectedjson);
+		
+							OR
+		sourceJson = FrameworkHelper.RetrieveJson(_response);
+        expectedJson = FrameworkHelper.GetJson(testdata.expectedjson);
+
+        JsonCompare.Compare(sourceJson, expectedJson);
+	}
+  }
+}
+
+
+
+namespace ABC{
+
+	class FrameworkHelper{
+		public static ResponseContext _response = null;
+		public static RestAssured restobj = null;
+        private static Dictionary<string, string> headersDict = new Dictionary<string, string>();
+		
+		public static ResponseContext Get(string headers, string host, string uri, bool testType = true)
+        {
+            List<string> headerslist = headers.Split(';').ToList();
+            RestAssured restobj = new RestAssured();
+            headersDict.Clear();
+            foreach (string header in headerslist)
+            {
+                string[] keyvalue = header.Split(':');
+                headersDict.Add(keyvalue[0], keyvalue[1]);
+            }
+			
+			using (var httpClientHandler = new HttpClientHandler())
+            {
+                httpClientHandler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
+                using (var client = new HttpClient(httpClientHandler))
+                {
+                    var setupContext = restobj.Given().Host(host).Uri(uri).Headers(headersDict);
+                    if (ishttps)
+                    {
+                        // Passing handler to allow invalid certificates being validated as true and continue without any security error
+                        // When services are hosted over https
+                        setupContext = setupContext.HttpClient(client);
+                    }
+                    return setupContext.When().Get().Then();
+                }
+            }
+		}
+		
+		public static ResponseContext Post(string host, string headerContent, string uri, string postJson, bool testType = true)
+        {
+            RestAssured restobj = new RestAssured();
+
+            headersDict.Clear();
+
+            if (_response != null)
+            { _response = null; }
+
+            headersDict.Add("Content-Type", headerContent);
+			
+			using (var httpClientHandler = new HttpClientHandler())
+            {
+                httpClientHandler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
+                using (var client = new HttpClient(httpClientHandler))
+                {
+                    var setupContext = restobj.Given().Host(host).Headers(headersDict).Uri(uri).Body(postJson);
+
+                    if (ishttps)
+                    {
+                        // Passing handler to allow invalid certificates being validated as true and continue without any security error
+                        // When services are hosted over https
+                        setupContext = setupContext.HttpClient(client);
+                    }
+
+                    return setupContext.When().Post().Then();
+                }
+            }
+		}
+		
+		public static void VerifyStatus(ResponseContext _response, string ruleName, int statuscode)
+        {           
+            int actualStatusCode = 0;
+            try
+            {
+                _response
+                .TestStatus(ruleName, x =>
+                {
+                    actualStatusCode = x;
+                    return x == statuscode;
+                })
+                .Assert(ruleName);
+            }
+            catch (Exception ex)
+            {
+                _response.Debug();
+                throw new AssertionException($"StatusCode expected {statuscode} but is {actualStatusCode}");
+            }
+        }
+		
+		public static string RetrieveJson(ResponseContext _response)
+        {
+            //string responseJson = _response._content;
+            object responseJsonobj = _response.Retrieve(Retrieve);
+            return responseJsonobj.ToString();
+
+        }
+		
+		public static string GetJson(string data)
+        {
+            string strJson;
+            if (data.EndsWith(".json"))
+            {
+                StreamReader reader = new StreamReader
+                    (Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory + "TestData\\TestDataJson\\" + data), System.Text.Encoding.Default);
+                strJson = reader.ReadToEnd();
+            }
+            else
+            {
+                strJson = data;
+            }
+            return strJson;
+        }
+	}
+}
+
+
+
+
+namespace ABC{
+	public class JsonCompare{
+		private static dynamic sourceJson;
+        private static dynamic targetJson;
+        private static dynamic actualJson;
+		
+		public static void Compare(string sourceJsonString, string targetJsonString)
+        {
+            if (sourceJsonString.Substring(0, 1).ToLower() == "[")
+            {
+                sourceJson = JsonConvert.DeserializeObject<JArray>(sourceJsonString);
+                targetJson = JsonConvert.DeserializeObject<JArray>(targetJsonString);
+                int comp = JTokenComparer.Instance.Compare(sourceJson, targetJson);
+                Assert.IsTrue(comp == 0);
+            }
+            else
+            {
+                actualJson = JsonConvert.DeserializeObject<JObject>(sourceJsonString);
+                if (actualJson["result"] != null)
+                {
+                    sourceJsonString = actualJson["result"].ToString();
+                }
+                if (actualJson["content"] != null)
+                {
+                    sourceJsonString = actualJson["content"].ToString();
+                }
+
+                sourceJson = JsonConvert.DeserializeObject<JObject>(sourceJsonString);
+                targetJson = JsonConvert.DeserializeObject<JObject>(targetJsonString);
+                
+                int comp = JTokenComparer.Instance.Compare(sourceJson, targetJson);
+                Assert.IsTrue(comp == 0);
+            }
+        }
+	}
+}
